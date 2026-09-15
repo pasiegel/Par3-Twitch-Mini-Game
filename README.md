@@ -5,6 +5,7 @@ A local OBS Browser Source mini-game. Viewers type `!join` in chat to enter a
 golf (one animated swing per hole, random stroke result from Hole in One to
 Triple Bogey), one player at a time, and a final scorecard is shown at the
 end. Stats persist between streams.
+➡️ **Application Demo:** [[https://vpinhub.github.io/tournamenthelper/](https://vpinhub.github.io/tournamenthelper/](https://pasiegel.github.io/Par3-Twitch-Mini-Game/demo/))
 
 ![Round Scorecard](screenshots/scorecard.png)
 
