@@ -24,7 +24,7 @@ The Twitch channel isn't hardcoded - it lives in `config.js`, next to
 `index.html`:
 ```js
 const GAME_CONFIG = {
-  channel: "PaladinArcade"
+  channel: "TwitchChannelName"
 };
 ```
 Edit the `channel` value (any text editor) to point this at a different
