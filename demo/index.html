@@ -1,1 +1,1422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Toad Royale - Twitch Chat Mini-Game</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --fs-xs: 10px;
+    --fs-sm: 12px;
+    --fs-md: 14px;
+    --fs-lg: 18px;
+    --fs-xl: 26px;
+  }
 
+  /* ================= BASE / TRANSPARENT STAGE (4:3, 640x480) ================= */
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0); /* transparent for OBS Browser Source */
+    font-family: 'Press Start 2P', monospace;
+    color: #eaffea;
+    overflow: hidden;
+  }
+
+  #stage {
+    position: relative;
+    width: 640px;
+    height: 480px;
+    margin: 0;
+  }
+
+  /* CRT scanline overlay - sits above panel backgrounds/game art but behind
+     text (see the z-index:3 rules below), so the retro texture never dulls
+     readability. Alternates a faint LIGHT line with a faint DARK line (rather
+     than just darkening) so it stays visible over both the black menu screens
+     and the lighter Hopping gameplay art. */
+  #scanlineOverlay {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(255,255,255,0.05) 0px,
+      rgba(255,255,255,0.05) 1px,
+      rgba(0,0,0,0.14) 1px,
+      rgba(0,0,0,0.14) 2px,
+      transparent 2px,
+      transparent 4px
+    );
+  }
+
+  /* Text content that must stay crisp above the scanlines (the Hopping
+     panel's #eventBanner already has its own higher z-index for this).
+     #idlePrompt itself is deliberately NOT here anymore now that it's a full
+     colorful splash background - only its #splashLogo/#splashCta text
+     children are, so the scanline texture shows over the splash's gradient
+     and decorative scene, same as it does over every other panel's art. */
+  #hallOfFame, #statsCard,
+  #panelLobby > h1, #lobbyTimer, #lobbyList,
+  #stageHeader, #stageRecap, #tombstoneScene, #finalRecapView, #allTimeView {
+    position: relative;
+    z-index: 3;
+  }
+
+  /* Frogger-style black/white menu screens (Idle, Lobby, Results) - the
+     Hopping panel keeps its own themed road/swamp/highway game art instead.
+     Compound .panel.panel-menu selector so this reliably beats .panel's own
+     background/border regardless of stylesheet order (equal specificity
+     would otherwise let source order decide, which is fragile). */
+  .panel.panel-menu {
+    background: #000;
+    border-color: #fff;
+    box-shadow: 0 0 0 2px #333 inset;
+    color: #fff;
+  }
+  .panel-menu h1, .panel-menu h2 { color: #fff; }
+  .panel-menu #idlePrompt { color: #fff; }
+
+  /* Lobby gets the same colorful arcade treatment as the splash (same
+     gradient, for visual continuity between the two "hype" screens) -
+     scoped via its own class rather than .panel-menu, since Lobby isn't a
+     quiet stats menu, it's "get hyped, the clock is running." */
+  .panel.panel-lobby {
+    background: linear-gradient(160deg, #1b0f3d 0%, #3a1c71 30%, #0f5e9c 65%, #0f9c6c 100%);
+    border-color: #ffd400;
+    box-shadow: 0 0 0 2px #333 inset;
+    color: #fff;
+  }
+
+  .panel {
+    display: none;
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    padding: 14px 18px;
+    background: linear-gradient(180deg, #0b3d0b 0%, #145214 100%);
+    border: 4px solid #ffd400;
+    border-radius: 6px;
+    box-shadow: 0 0 0 2px #063606 inset;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: #ffd400 transparent;
+  }
+  .panel.active { display: block; }
+  .panel::-webkit-scrollbar { width: 6px; }
+  .panel::-webkit-scrollbar-thumb { background: #ffd400; border-radius: 3px; }
+  .panel::-webkit-scrollbar-track { background: transparent; }
+
+  h1, h2, h3 { margin: 0 0 8px 0; text-shadow: 2px 2px 0 #000; }
+  h1 { font-size: var(--fs-lg); color: #ffd400; }
+  h2 { font-size: var(--fs-md); color: #fffbcc; }
+  .small { font-size: var(--fs-xs); line-height: 1.6; }
+
+  /* ================= IDLE SPLASH / HALL OF FAME ================= */
+  /* Colorful arcade-style title screen, scoped to just #idlePrompt (not the
+     whole panel) so the Hall of Fame view - and Lobby/Results elsewhere -
+     keep the plain black/white Frogger-menu look untouched. */
+  #idlePrompt {
+    position: relative;
+    height: 100%;
+    box-sizing: border-box;
+    padding: 18px 14px;
+    border-radius: 10px;
+    background: linear-gradient(160deg, #1b0f3d 0%, #3a1c71 30%, #0f5e9c 65%, #0f9c6c 100%);
+    box-shadow: 0 0 0 3px #ffd400 inset;
+    overflow: hidden;
+    text-align: center;
+  }
+
+  #splashLogo { position: relative; z-index: 3; margin: 10px 0 6px; }
+  .logo-word {
+    display: block;
+    font-size: 40px;
+    line-height: 1.3;
+    -webkit-text-stroke: 2px #1a0a33;
+    text-shadow: 4px 4px 0 rgba(0,0,0,0.45);
+    animation: logoBounce 1.6s ease-in-out infinite;
+  }
+  .logo-toad {
+    background: linear-gradient(180deg, #fff59d 0%, #ffd400 45%, #ff8a00 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .logo-royale {
+    background: linear-gradient(180deg, #c8ffb0 0%, #33e07a 45%, #0f9c6c 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation-delay: 0.15s;
+  }
+  @keyframes logoBounce {
+    0%, 100% { transform: translateY(0) scale(1); }
+    50%      { transform: translateY(-4px) scale(1.04); }
+  }
+
+  #splashScene {
+    position: relative;
+    height: 110px;
+    margin: 16px auto;
+    max-width: 520px;
+    border: 3px solid #000;
+    border-radius: 6px;
+    overflow: hidden;
+    background: #555;
+  }
+  #splashScene::after {
+    content: "";
+    position: absolute;
+    top: 50%; left: 0; right: 0; height: 4px;
+    transform: translateY(-50%);
+    background: repeating-linear-gradient(90deg, #ffd400 0 24px, transparent 24px 44px);
+  }
+  #splashToad {
+    position: absolute;
+    left: 50%;
+    bottom: 10px;
+    transform: translateX(-50%);
+    width: 24px;
+    height: 32px;
+    animation: toadHop 1.1s ease-in-out infinite;
+  }
+  #splashToad .head {
+    position: absolute; top: 0; left: 6px; width: 12px; height: 12px;
+    border-radius: 50%; background: #ffd9a8; box-shadow: 0 0 0 2px #000;
+  }
+  #splashToad .body {
+    position: absolute; top: 10px; left: 3px; width: 18px; height: 22px;
+    border-radius: 4px; background: #ff8c1a; box-shadow: 0 0 0 2px #000;
+  }
+  @keyframes toadHop {
+    0%, 100%  { transform: translateX(-50%) translateY(0); }
+    40%, 60%  { transform: translateX(-50%) translateY(-16px); }
+  }
+
+  #splashCta {
+    position: relative;
+    z-index: 3;
+    margin-top: 8px;
+    font-size: var(--fs-lg);
+    color: #ffd400;
+    text-shadow: 2px 2px 0 #000, 0 0 10px rgba(255,212,0,0.65);
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.55; transform: scale(1.05); }
+  }
+
+  #statsCard { display: none; text-align: center; }
+  #statsCardName { font-size: var(--fs-xl); }
+  #statsCardBody { margin: 14px 0 0; }
+  #statsCardBody .stat-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 10px 12px;
+    font-size: var(--fs-lg);
+    border-bottom: 1px dashed #2f6b2f;
+  }
+
+  #leaderboardList, #resultsLeaderboardList { list-style: none; margin: 6px 0 0; padding: 0; font-size: var(--fs-sm); }
+  #leaderboardList li, #resultsLeaderboardList li {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 6px;
+    border-bottom: 1px dashed #2f6b2f;
+  }
+  #leaderboardList li:nth-child(1), #resultsLeaderboardList li:nth-child(1) { color: #ffd400; }
+
+  /* ================= LOBBY ================= */
+  #lobbyTimer {
+    font-size: var(--fs-xl);
+    color: #ffd400;
+    text-align: center;
+    text-shadow: 2px 2px 0 #000, 0 0 14px rgba(255,212,0,0.7);
+    animation: lobbyTimerPulse 1s ease-in-out infinite;
+  }
+  @keyframes lobbyTimerPulse {
+    0%, 100% { transform: scale(1); }
+    50%      { transform: scale(1.06); }
+  }
+  #lobbyList { list-style: none; margin: 6px 0 0; padding: 0; font-size: var(--fs-sm); }
+  #lobbyList li { padding: 2px 0; animation: slideIn 0.25s ease-out; }
+  @keyframes slideIn {
+    from { transform: translateX(-20px); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+  #toast {
+    position: absolute;
+    bottom: 8px;
+    left: 18px;
+    right: 18px;
+    z-index: 3;
+    font-size: var(--fs-sm);
+    color: #0b3d0b;
+    background: #ffd400;
+    padding: 4px 8px;
+    border-radius: 3px;
+    display: none;
+  }
+  #toast.show { display: block; animation: fadeOut 3s forwards; }
+  @keyframes fadeOut {
+    0%, 70% { opacity: 1; }
+    100% { opacity: 0; }
+  }
+
+  /* ================= HOPPING (stages + per-player turn animation) ================= */
+  #stageHeader { text-align: center; margin-bottom: 4px; }
+  #stageHeader h1 { margin-bottom: 2px; }
+  #turnInfo { font-size: var(--fs-sm); color: #d8ffd8; text-align: center; }
+
+  #hopTrack {
+    position: relative;
+    width: 100%;
+    height: 340px;
+    margin-top: 8px;
+    border: 3px solid #000;
+    border-radius: 4px;
+    overflow: hidden;
+    background: #333;
+  }
+
+  /* Between-stage recap: who's advancing vs. eliminated. Occupies the same
+     spot as #hopTrack (only one of the two is ever displayed at once). */
+  #stageRecap {
+    display: none;
+    width: 100%;
+    height: 340px;
+    margin-top: 8px;
+    border: 3px solid #000;
+    border-radius: 4px;
+    background: #1a1a1a;
+    box-sizing: border-box;
+    padding: 10px;
+    overflow-y: auto;
+  }
+  #stageRecap.show { display: block; }
+  #stageRecapTitle { text-align: center; margin-bottom: 6px; }
+  #stageRecapColumns { display: flex; gap: 14px; }
+  .recap-col { flex: 1; min-width: 0; }
+  .recap-col h3 {
+    text-align: center;
+    font-size: var(--fs-sm);
+    margin: 0 0 4px;
+  }
+  .recap-col.advancing h3 { color: #7fffb0; }
+  .recap-col.eliminated h3 { color: #ff8a6b; }
+  .recap-col ul { list-style: none; margin: 0; padding: 0; font-size: var(--fs-sm); }
+  .recap-col li {
+    text-align: center;
+    padding: 3px 4px;
+    border-bottom: 1px dashed #2f6b2f;
+  }
+  .recap-col.advancing li { color: #d8ffe6; }
+  .recap-col.eliminated li { color: #ffd0c4; }
+
+  /* ================= IN MEMORIAM (Oregon Trail tombstone parody) ================= */
+  #tombstoneScene {
+    position: relative;
+    width: 100%;
+    height: 380px;
+    margin-top: 6px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+  }
+  #tombstone {
+    position: relative;
+    width: 420px;
+    max-width: 92%;
+    background: #b9b9b9;
+    border: 4px solid #6b6b6b;
+    border-top-left-radius: 140px;
+    border-top-right-radius: 140px;
+    border-bottom-left-radius: 6px;
+    border-bottom-right-radius: 6px;
+    padding: 26px 22px 30px;
+    box-sizing: border-box;
+    text-align: center;
+    box-shadow: 0 0 0 3px #444 inset, 4px 6px 0 rgba(0,0,0,0.4);
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  #tombstone.show { animation: tombstoneRise 0.6s ease-out forwards; }
+  @keyframes tombstoneRise {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  #tombstoneRip {
+    font-size: var(--fs-lg);
+    color: #444;
+    text-shadow: 1px 1px 0 #ddd;
+    margin-bottom: 16px;
+  }
+  #tombstoneName {
+    font-size: var(--fs-lg);
+    color: #202020;
+    margin-bottom: 10px;
+    word-break: break-word;
+  }
+  #tombstoneCause {
+    font-size: var(--fs-xs);
+    color: #555;
+    margin-bottom: 16px;
+    font-style: italic;
+  }
+  #tombstoneEpitaph {
+    font-size: var(--fs-sm);
+    color: #2b2b2b;
+    line-height: 1.7;
+  }
+  #tombstoneMound {
+    width: 480px;
+    max-width: 98%;
+    height: 26px;
+    margin-top: -4px;
+    background: repeating-linear-gradient(45deg, #2f6b2f, #2f6b2f 8px, #275c27 8px, #275c27 16px);
+    border-radius: 50% / 100% 100% 0 0;
+    border: 3px solid #1a3d1a;
+    border-bottom: none;
+  }
+
+  #goalZone {
+    position: absolute; top: 0; left: 0; right: 0; height: 14%;
+    background: repeating-linear-gradient(45deg, #2f9e2f, #2f9e2f 8px, #278a27 8px, #278a27 16px);
+    border-bottom: 3px dashed #ffd400;
+  }
+  #startZone {
+    position: absolute; bottom: 0; left: 0; right: 0; height: 14%;
+    background: repeating-linear-gradient(45deg, #6b5335, #6b5335 8px, #5c4629 8px, #5c4629 16px);
+    border-top: 3px dashed #ffd400;
+  }
+  #laneArea {
+    position: absolute; top: 14%; bottom: 14%; left: 0; right: 0;
+    overflow: hidden;
+  }
+
+  /* --- theme backgrounds --- */
+  .theme-country #laneArea { background: #555; }
+  .theme-country #laneArea::after {
+    content: ""; position: absolute; top: 50%; left: 0; right: 0; height: 4px;
+    transform: translateY(-50%);
+    background: repeating-linear-gradient(90deg, #ffd400 0 24px, transparent 24px 44px);
+  }
+  .theme-swamp #laneArea { background: linear-gradient(180deg, #3a4a2a, #2a3a1e); }
+  .theme-highway #laneArea, .theme-overtime #laneArea { background: #2b2b2b; }
+  .theme-highway #laneArea::after, .theme-overtime #laneArea::after {
+    content: ""; position: absolute; top: 25%; left: 0; right: 0; height: 3px;
+    background: repeating-linear-gradient(90deg, #eee 0 18px, transparent 18px 34px);
+    box-shadow: 0 50px 0 0 rgba(238,238,238,0.6), 0 100px 0 0 rgba(238,238,238,0.6);
+  }
+
+  /* --- hazard sprites (decorative, looping) --- */
+  #hazardLayer > div { position: absolute; }
+  .hazard { position: absolute; }
+  .car {
+    width: 46px; height: 20px; border-radius: 5px; background: #d43b3b;
+    box-shadow: 0 0 0 2px #000;
+  }
+  .car::before, .car::after {
+    content: ""; position: absolute; bottom: -5px; width: 8px; height: 8px;
+    border-radius: 50%; background: #111;
+  }
+  .car::before { left: 5px; } .car::after { right: 5px; }
+  .truck { width: 70px; height: 26px; border-radius: 4px; background: #d47a1a; box-shadow: 0 0 0 2px #000; }
+  .truck::before, .truck::after {
+    content: ""; position: absolute; bottom: -5px; width: 8px; height: 8px;
+    border-radius: 50%; background: #111;
+  }
+  .truck::before { left: 8px; } .truck::after { right: 8px; }
+  .log { width: 90px; height: 18px; border-radius: 10px; background: #6b4423; box-shadow: 0 0 0 2px #3f280f inset; }
+  .gator { width: 60px; height: 16px; border-radius: 8px; background: #3a6b2a; box-shadow: 0 0 0 2px #1f3d15 inset; }
+
+  @keyframes driveRight { from { left: -20%; } to { left: 115%; } }
+  @keyframes driveLeft  { from { left: 115%; } to { left: -20%; } }
+
+  [data-theme] { display: none; }
+  .theme-country [data-theme="country"],
+  .theme-swamp [data-theme="swamp"],
+  .theme-highway [data-theme="highway"],
+  .theme-overtime [data-theme="highway"] { display: block; }
+
+  /* --- player character token --- */
+  #characterToken {
+    position: absolute;
+    left: 50%;
+    bottom: 6%;
+    transform: translateX(-50%);
+    width: 22px;
+    height: 30px;
+    z-index: 5;
+  }
+  #characterToken .head {
+    position: absolute; top: 0; left: 6px; width: 10px; height: 10px;
+    border-radius: 50%; background: #ffd9a8; box-shadow: 0 0 0 2px #000;
+  }
+  #characterToken .body {
+    position: absolute; top: 9px; left: 3px; width: 16px; height: 21px;
+    border-radius: 3px; background: #ff8c1a; box-shadow: 0 0 0 2px #000;
+  }
+
+  /* --- striker sprite: drives across and "hits" the character on elimination,
+     timed to arrive at center exactly when the character's crossing animation
+     ends - see triggerStrikerHit() in the script below. Reuses .car/.truck/
+     .gator shape classes, applied dynamically per stage theme. --- */
+  #strikerSprite {
+    position: absolute;
+    bottom: 6%;
+    left: -20%;
+    z-index: 7;
+    opacity: 0;
+  }
+
+  /* --- blood splat --- */
+  #bloodSplat {
+    position: absolute;
+    left: 50%;
+    bottom: 6%;
+    transform: translateX(-50%) scale(0);
+    width: 40px;
+    height: 40px;
+    z-index: 6;
+    opacity: 0;
+  }
+  #bloodSplat.show { animation: splatPop 1.4s ease-out forwards; }
+  #bloodSplat::before, #bloodSplat::after {
+    content: ""; position: absolute; border-radius: 50%; background: #b30000;
+  }
+  #bloodSplat::before { width: 28px; height: 28px; top: 6px; left: 6px; }
+  #bloodSplat::after { width: 14px; height: 14px; top: -4px; left: 20px; }
+  @keyframes splatPop {
+    0%   { opacity: 0; transform: translateX(-50%) scale(0.2); }
+    20%  { opacity: 1; transform: translateX(-50%) scale(1.15); }
+    35%  { opacity: 1; transform: translateX(-50%) scale(1); }
+    100% { opacity: 1; transform: translateX(-50%) scale(1); }
+  }
+
+  /* --- shared event banner: stage intro / turn result / stage summary --- */
+  #eventBanner {
+    position: absolute;
+    left: 5%; right: 5%; top: 40%;
+    transform: translateY(-50%);
+    text-align: center;
+    font-size: var(--fs-md);
+    color: #ffd400;
+    text-shadow: 2px 2px 0 #000;
+    z-index: 10;
+    opacity: 0;
+    pointer-events: none;
+  }
+  #eventBanner.show { animation: bannerPop 1.4s ease-out 1; }
+  #eventBanner.success { color: #7fffb0; }
+  #eventBanner.fail {
+    color: #ff5050;
+    text-shadow: 0 0 6px #ff5050, 0 0 14px #b30000;
+  }
+  #eventBanner.summary { font-size: var(--fs-sm); color: #fffbcc; }
+  @keyframes bannerPop {
+    0%   { opacity: 0; transform: translateY(-50%) scale(0.85); }
+    15%  { opacity: 1; transform: translateY(-50%) scale(1.08); }
+    25%  { opacity: 1; transform: translateY(-50%) scale(1); }
+    85%  { opacity: 1; }
+    100% { opacity: 0; }
+  }
+
+  /* ================= FINAL RESULTS: cycles between recap and All-Time Champions ================= */
+  #finalRecapView, #allTimeView { display: none; }
+  #finalRecapView.showing, #allTimeView.showing { display: block; }
+  #finalRecapList { list-style: none; margin: 6px 0 0; padding: 0; font-size: var(--fs-sm); }
+  #finalRecapList li {
+    display: flex; justify-content: space-between;
+    padding: 4px 6px; border-bottom: 1px dashed #2f6b2f;
+  }
+  #finalRecapList li.winner-row {
+    color: #fff200;
+    text-shadow: 0 0 6px #fff200, 0 0 14px #ff9d00;
+  }
+
+  /* ================= DEV / SIMULATOR PANEL ================= */
+  #devPanel {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 660px;
+    width: 340px;
+    height: 480px;
+    background: #101010;
+    color: #d8ffd8;
+    font-family: monospace;
+    font-size: var(--fs-md);
+    padding: 10px;
+    box-sizing: border-box;
+    border: 1px solid #444;
+    overflow-y: auto;
+  }
+  #devPanel.show { display: block; }
+  #devPanel h3 { color: #ffd400; font-size: var(--fs-md); }
+  #devPanel label { display: block; margin: 6px 0 2px; }
+  #devPanel input[type=text] { width: 100%; box-sizing: border-box; padding: 3px; font-family: monospace; }
+  #devPanel button { margin: 4px 4px 4px 0; padding: 4px 8px; cursor: pointer; }
+  #devToggleBtn {
+    position: fixed; top: 4px; left: 4px; z-index: 999;
+    font-size: 9px; opacity: 0.35; background: #000; color: #fff;
+    border: 1px solid #555; padding: 2px 5px; cursor: pointer;
+  }
+  #devToggleBtn:hover { opacity: 1; }
+  #devLog { margin-top: 8px; max-height: 80px; overflow-y: auto; font-size: var(--fs-sm); color: #9adf9a; }
+</style>
+</head>
+<body>
+
+  <div id="stage">
+    <div id="scanlineOverlay"></div>
+
+    <!-- STATE 1: Idle & Hall of Fame -->
+    <div id="panelIdle" class="panel panel-menu active">
+      <div id="idlePrompt">
+        <div id="splashLogo">
+          <span class="logo-word logo-toad">TOAD</span>
+          <span class="logo-word logo-royale">ROYALE</span>
+        </div>
+        <div id="splashScene">
+          <div class="hazard car"   style="top:12%; animation: driveRight 3.2s linear infinite;"></div>
+          <div class="hazard truck" style="top:58%; animation: driveLeft 4.1s linear infinite;"></div>
+          <div id="splashToad">
+            <div class="head"></div>
+            <div class="body"></div>
+          </div>
+        </div>
+        <div id="splashCta">Type !join to play!</div>
+      </div>
+      <div id="hallOfFame" style="display:none;">
+        <h2>All-Time Champions</h2>
+        <ul id="leaderboardList"></ul>
+      </div>
+      <!-- Shown temporarily by !stats, then reverts to the normal idle cycle above. -->
+      <div id="statsCard">
+        <h2 id="statsCardName">Player Stats</h2>
+        <div id="statsCardBody"></div>
+      </div>
+    </div>
+
+    <!-- STATE 2: Lobby / Queue -->
+    <div id="panelLobby" class="panel panel-lobby">
+      <h1>TOAD ROYALE - LOBBY OPEN</h1>
+      <div id="lobbyTimer">60</div>
+      <ul id="lobbyList"></ul>
+      <div id="toast"></div>
+    </div>
+
+    <!-- STATE 3: Hopping - 3 stages, one player at a time, eliminating until 1 winner -->
+    <div id="panelHopping" class="panel">
+      <div id="stageHeader">
+        <h1 id="stageTitle">STAGE</h1>
+        <div id="turnInfo">&nbsp;</div>
+      </div>
+      <div id="hopTrack" class="theme-country">
+        <div id="goalZone"></div>
+        <div id="laneArea">
+          <div id="hazardLayer">
+            <div class="hazard car"    data-theme="country" style="top:20%; animation: driveRight 3.74s linear infinite;"></div>
+            <div class="hazard car"    data-theme="country" style="top:50%; animation: driveLeft 4.62s linear infinite;"></div>
+            <div class="hazard truck"  data-theme="country" style="top:78%; animation: driveRight 5.5s linear infinite;"></div>
+
+            <div class="hazard log"   data-theme="swamp" style="top:18%; animation: driveLeft 6.05s linear infinite;"></div>
+            <div class="hazard gator" data-theme="swamp" style="top:50%; animation: driveRight 5.06s linear infinite;"></div>
+            <div class="hazard log"   data-theme="swamp" style="top:80%; animation: driveLeft 6.82s linear infinite;"></div>
+
+            <div class="hazard car"   data-theme="highway" style="top:12%; animation: driveRight 1.76s linear infinite;"></div>
+            <div class="hazard truck" data-theme="highway" style="top:36%; animation: driveLeft 2.31s linear infinite;"></div>
+            <div class="hazard car"   data-theme="highway" style="top:60%; animation: driveRight 1.54s linear infinite;"></div>
+            <div class="hazard truck" data-theme="highway" style="top:84%; animation: driveLeft 2.64s linear infinite;"></div>
+          </div>
+        </div>
+        <div id="startZone"></div>
+        <div id="strikerSprite"></div>
+        <div id="characterToken">
+          <div class="head"></div>
+          <div class="body"></div>
+        </div>
+        <div id="bloodSplat"></div>
+        <div id="eventBanner"></div>
+      </div>
+      <!-- Shown between stages/rounds in place of #hopTrack for STAGE_RECAP_MS. -->
+      <div id="stageRecap">
+        <h2 id="stageRecapTitle">STAGE COMPLETE</h2>
+        <div id="stageRecapColumns">
+          <div class="recap-col advancing">
+            <h3>Advancing</h3>
+            <ul id="stageRecapAdvancing"></ul>
+          </div>
+          <div class="recap-col eliminated">
+            <h3>Eliminated</h3>
+            <ul id="stageRecapEliminated"></ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STATE 4: Final Results - cycles between the winner recap and All-Time Champions -->
+    <!-- STATE: In Memoriam - cycles a full-page Oregon-Trail-style tombstone per eliminated player -->
+    <div id="panelMemoriam" class="panel panel-menu">
+      <h1>IN MEMORIAM</h1>
+      <div id="tombstoneScene">
+        <div id="tombstone">
+          <div id="tombstoneRip">R.I.P.</div>
+          <div id="tombstoneName">Name</div>
+          <div id="tombstoneCause">Died on the Highway</div>
+          <div id="tombstoneEpitaph">"Epitaph"</div>
+        </div>
+        <div id="tombstoneMound"></div>
+      </div>
+    </div>
+
+    <div id="panelResults" class="panel panel-menu">
+      <div id="finalRecapView">
+        <h1 id="finalTitle">RESULTS</h1>
+        <ul id="finalRecapList"></ul>
+      </div>
+      <div id="allTimeView">
+        <h2>All-Time Champions</h2>
+        <ul id="resultsLeaderboardList"></ul>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ================= DEV / SIMULATOR PANEL ================= -->
+  <div id="devPanel">
+    <h3>TOAD ROYALE DEV CONSOLE</h3>
+    <div class="small">Live Twitch chat is <span id="devChatStatus">OFF</span> (see README "Going Live").</div>
+
+    <label>Username</label>
+    <input type="text" id="devUsername" value="Runner1">
+
+    <label>Message</label>
+    <input type="text" id="devMessage" value="!join" onkeydown="if(event.key==='Enter')devSendChat();">
+
+    <label><input type="checkbox" id="devBroadcasterFlag"> Send as broadcaster (flags.broadcaster)</label>
+
+    <div>
+      <button onclick="devSendChat()">Send Chat Message</button>
+      <button onclick="devQuickJoin()">Quick !join</button>
+      <button onclick="devFloodJoins(5)">Flood 5 Random Joins</button>
+      <button onclick="devSendStats()">Quick !stats</button>
+      <button onclick="devSendReset()">!resettoad (as broadcaster)</button>
+    </div>
+
+    <div id="devLog"></div>
+  </div>
+
+  <!--
+    DEMO BUILD - self-contained, single file, no backend required.
+    Differences from the real index.html:
+      - DEV_MODE is forced on (always shows the Dev Console simulator; never
+        auto-connects to Twitch, since there's nothing to configure a channel
+        for here - click "Connect to Twitch Chat" yourself if you want to
+        show that part off too).
+      - loadStats()/saveStats() keep everything in an in-memory object only
+        (seeded with a few example players) - nothing is written to disk or
+        any server, and it all resets on page reload. Safe to host anywhere
+        static files are served (a plain `python -m http.server`, GitHub
+        Pages, etc.) with zero setup.
+    See ../README.md for the real, backend-connected version.
+  -->
+  <!-- ComfyJS handles real Twitch chat reading (anonymous, read-only). -->
+  <script src="https://cdn.jsdelivr.net/npm/comfy.js@latest/dist/comfy.min.js"></script>
+  <script>
+  /* =========================================================================
+   * TOAD ROYALE - CONFIG
+   * ========================================================================= */
+  const CHANNEL_NAME  = "your_channel_here"; // demo build - not used unless you click Connect to Twitch Chat
+  const API_BASE      = "http://localhost:5050"; // unused in the demo build (no backend)
+  const LOBBY_SECONDS = 60;
+  const MIN_PLAYERS   = 2; // an elimination bracket needs at least 2 to be meaningful
+
+  const STAGES = [
+    { name: "Country Road", key: "country",  survivalRate: 0.75, points: 10, minSurvivors: 2 },
+    { name: "Swamp",        key: "swamp",    survivalRate: 0.60, points: 25, minSurvivors: 2 },
+    { name: "Highway",      key: "highway",  survivalRate: 0.45, points: 50, minSurvivors: 2 }
+  ];
+  const OVERTIME_POINTS = 70;  // eliminated during a sudden-death round (survived all 3 real stages)
+  const WINNER_POINTS   = 100;
+
+  const CROSS_ANIM_MS      = 1760; // 1600 * 1.1 (10% slower); must match the character's WAAPI duration below
+  const STRIKE_ANIM_MS     = CROSS_ANIM_MS * 2; // striker travels edge-to-edge in 2x CROSS_ANIM_MS so its
+                                    // midpoint (where it "hits") lines up with the character finishing its crossing
+  const TURN_RESULT_HOLD_MS = 1400;
+  const STAGE_BANNER_MS     = 1800;
+  const WINNER_BANNER_HOLD_MS = 5200; // hold time for the "<NAME> WINS!" banner - always >= the requested 5s
+  const STAGE_RECAP_MS      = 3500; // between-stage Advancing/Eliminated recap - always >= the requested 3s
+  const MEMORIAM_HOLD_MS    = 6000; // how long each In Memoriam tombstone stays on screen
+
+  // Oregon Trail parody: "You have died of dysentery" -> a themed one-liner
+  // per stage a player was eliminated on. Picked randomly per tombstone.
+  const EPITAPHS_BY_THEME = {
+    country: [
+      "Tried to beat the car. The car won.",
+      "Should have looked both ways. Or even one way.",
+      "Became a hood ornament.",
+      "Learned the hard way that cars don't yield to toads.",
+      "Got a permanent flat.",
+      "Thought jaywalking was a suggestion."
+    ],
+    swamp: [
+      "Picked the wrong log. It sank.",
+      "Got a little too friendly with a gator.",
+      "Learned logs don't grow on trees. Or do they?",
+      "Sank to the bottom with the other logs.",
+      "Should have taken swimming lessons.",
+      "Became gator chow."
+    ],
+    highway: [
+      "Tried to out-hop an 18-wheeler. Lost.",
+      "Achieved peak flatness.",
+      "Got the ultimate reality check from a semi.",
+      "Learned that trucks don't do speed limits for toads.",
+      "Went out in a blaze of asphalt.",
+      "Became one with the road."
+    ],
+    overtime: [
+      "Lost the coin flip of destiny.",
+      "So close, yet so squashed.",
+      "Made it this far just to get got.",
+      "Sudden death lived up to its name.",
+      "Choked in the clutch. Literally."
+    ]
+  };
+  const FINAL_HOLD_SECONDS  = 24;
+  const RESULTS_CYCLE_MS    = 6000;
+  const STATS_CARD_MS       = 6000; // how long !stats stays on screen before reverting to the idle cycle
+
+  const STRIKER_SHAPE_BY_THEME = { country: "car", swamp: "gator", highway: "truck" };
+
+  const START_BOTTOM_PCT = 6;
+  const GOAL_BOTTOM_PCT  = 92;
+
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+  // Demo build: always dev mode (see the comment block above the <script> tags).
+  let DEV_MODE = true;
+
+  /* =========================================================================
+   * STATE MACHINE
+   * ========================================================================= */
+  let state = "IDLE"; // IDLE | LOBBY | HOPPING | MEMORIAM | RESULTS
+  let isLobbyOpen = false;
+  let isPlaying = false;
+
+  let stats = {};             // { name: { gamesPlayed, wins, totalPoints } }
+  let queue = [];
+  let activePlayers = [];
+  let eliminationLog = [];    // [{ name, stage, points }]
+  let lobbyTimerHandle = null;
+  let lobbySecondsLeft = LOBBY_SECONDS;
+  let idleCycleHandle = null;
+  let resultsCycleHandle = null;
+  let statsCardTimeoutHandle = null;
+
+  const el = id => document.getElementById(id);
+  const panels = {
+    IDLE: el("panelIdle"),
+    LOBBY: el("panelLobby"),
+    HOPPING: el("panelHopping"),
+    MEMORIAM: el("panelMemoriam"),
+    RESULTS: el("panelResults")
+  };
+
+  function setState(next) {
+    state = next;
+    isLobbyOpen = (state === "LOBBY");
+    // MEMORIAM counts as "still playing" so a stray !join can't cut the
+    // tombstone sequence short - it's the tail end of the same round.
+    isPlaying = (state === "LOBBY" || state === "HOPPING" || state === "MEMORIAM");
+    Object.values(panels).forEach(p => p.classList.remove("active"));
+    panels[next].classList.add("active");
+  }
+
+  /* =========================================================================
+   * BACKEND I/O
+   * ========================================================================= */
+  // Demo build: in-memory only, seeded with a few example players so the
+  // leaderboard/recap aren't empty on first load. No fetch, no disk, no
+  // server - resets whenever the page reloads.
+  async function loadStats() {
+    stats = {
+      "Runner1": { gamesPlayed: 6, wins: 2, totalPoints: 410 },
+      "Dasher99": { gamesPlayed: 4, wins: 1, totalPoints: 240 },
+      "HopKing": { gamesPlayed: 3, wins: 0, totalPoints: 95 }
+    };
+  }
+
+  async function saveStats() {
+    // stats is already updated in memory by the game logic before this is
+    // called - nothing external to persist to in the demo build.
+  }
+
+  /* =========================================================================
+   * STATE 1: IDLE & HALL OF FAME
+   * ========================================================================= */
+  function renderLeaderboardInto(listId) {
+    const rows = Object.entries(stats)
+      .map(([name, s]) => ({
+        name,
+        wins: s.wins || 0,
+        totalPoints: s.totalPoints || 0
+      }))
+      .sort((a, b) => (b.wins - a.wins) || (b.totalPoints - a.totalPoints))
+      .slice(0, 5);
+
+    const list = el(listId);
+    list.innerHTML = "";
+    if (rows.length === 0) {
+      list.innerHTML = `<li><span>No games played yet</span></li>`;
+      return;
+    }
+    rows.forEach(r => {
+      const li = document.createElement("li");
+      li.innerHTML = `<span>${r.name}</span><span>${r.wins} Wins | ${r.totalPoints} pts</span>`;
+      list.appendChild(li);
+    });
+  }
+  function renderLeaderboard() { renderLeaderboardInto("leaderboardList"); }
+
+  function startIdleCycle() {
+    clearInterval(idleCycleHandle);
+    let showingBoard = false;
+    idleCycleHandle = setInterval(() => {
+      if (state !== "IDLE") return;
+      showingBoard = !showingBoard;
+      el("idlePrompt").style.display = showingBoard ? "none" : "block";
+      el("hallOfFame").style.display = showingBoard ? "block" : "none";
+      if (showingBoard) renderLeaderboard();
+    }, 6000);
+  }
+
+  function enterIdle() {
+    setState("IDLE");
+    clearTimeout(statsCardTimeoutHandle);
+    el("statsCard").style.display = "none";
+    el("idlePrompt").style.display = "block";
+    el("hallOfFame").style.display = "none";
+    startIdleCycle();
+  }
+
+  // !stats: only meaningful when nothing's in progress (IDLE) - pauses the
+  // normal prompt/leaderboard cycle, shows the requesting viewer's own stats
+  // for STATS_CARD_MS, then reverts back to the idle cycle via enterIdle().
+  function showStatsCard(username) {
+    clearInterval(idleCycleHandle);
+    clearTimeout(statsCardTimeoutHandle);
+    el("idlePrompt").style.display = "none";
+    el("hallOfFame").style.display = "none";
+
+    const s = stats[username];
+    el("statsCardName").textContent = `${username}'s Stats`;
+    const body = el("statsCardBody");
+    if (!s || !s.gamesPlayed) {
+      body.innerHTML = `<div class="stat-row"><span>No games played yet</span></div>`;
+    } else {
+      const losses = s.gamesPlayed - s.wins;
+      body.innerHTML = `
+        <div class="stat-row"><span>Games Played</span><span>${s.gamesPlayed}</span></div>
+        <div class="stat-row"><span>Wins - Losses</span><span>${s.wins} - ${losses}</span></div>
+        <div class="stat-row"><span>Total Points</span><span>${s.totalPoints}</span></div>
+      `;
+    }
+    el("statsCard").style.display = "block";
+
+    statsCardTimeoutHandle = setTimeout(() => {
+      if (state !== "IDLE") return; // a lobby may have opened in the meantime - leave it alone
+      enterIdle();
+    }, STATS_CARD_MS);
+  }
+
+  /* =========================================================================
+   * STATE 2: LOBBY / QUEUE
+   * ========================================================================= */
+  function showToast(message) {
+    const toast = el("toast");
+    toast.textContent = message;
+    toast.classList.remove("show");
+    void toast.offsetWidth;
+    toast.classList.add("show");
+  }
+
+  function renderLobbyList() {
+    const list = el("lobbyList");
+    list.innerHTML = "";
+    queue.forEach(name => {
+      const li = document.createElement("li");
+      li.textContent = name;
+      list.appendChild(li);
+    });
+  }
+
+  function openLobby() {
+    clearInterval(idleCycleHandle);
+    clearInterval(resultsCycleHandle);
+    clearTimeout(statsCardTimeoutHandle); // in case a !stats card is showing
+    el("statsCard").style.display = "none";
+    queue = [];
+    lobbySecondsLeft = LOBBY_SECONDS;
+    setState("LOBBY");
+    el("lobbyTimer").textContent = lobbySecondsLeft;
+    renderLobbyList();
+
+    lobbyTimerHandle = setInterval(() => {
+      lobbySecondsLeft--;
+      el("lobbyTimer").textContent = lobbySecondsLeft;
+      if (lobbySecondsLeft <= 0) {
+        clearInterval(lobbyTimerHandle);
+        playTournament();
+      }
+    }, 1000);
+  }
+
+  function handleJoin(username) {
+    if (!isLobbyOpen) {
+      openLobby();
+    }
+    if (queue.includes(username)) return;
+    queue.push(username);
+    renderLobbyList();
+
+    const s = stats[username];
+    showToast(s && s.wins
+      ? `${username} joined! (${s.wins} career wins)`
+      : `${username} joined!`);
+  }
+
+  /* =========================================================================
+   * STATE 3: HOPPING - elimination bracket across themed stages
+   * ========================================================================= */
+  function setTrackTheme(themeKey) {
+    const track = el("hopTrack");
+    track.className = "theme-" + themeKey;
+  }
+
+  function resetCharacterToStart() {
+    const c = el("characterToken");
+    c.style.bottom = START_BOTTOM_PCT + "%";
+    c.style.left = "50%";
+    c.style.opacity = "1";
+    const splat = el("bloodSplat");
+    splat.classList.remove("show");
+    splat.style.opacity = "0";
+    el("strikerSprite").style.opacity = "0";
+  }
+
+  function triggerStrikerHit(themeKey, atBottomPct) {
+    const s = el("strikerSprite");
+    s.className = "hazard " + (STRIKER_SHAPE_BY_THEME[themeKey] || "car");
+    s.style.bottom = atBottomPct + "%";
+    s.style.left = "-20%";
+    s.style.opacity = "1";
+    s.animate(
+      [{ left: "-20%" }, { left: "120%" }],
+      { duration: STRIKE_ANIM_MS, easing: "linear" }
+    );
+  }
+
+  async function animateCharacter(targetBottomPct) {
+    const c = el("characterToken");
+    const anim = c.animate(
+      [{ bottom: START_BOTTOM_PCT + "%" }, { bottom: targetBottomPct + "%" }],
+      { duration: CROSS_ANIM_MS, easing: "ease-in-out", fill: "forwards" }
+    );
+    await anim.finished;
+    c.style.bottom = targetBottomPct + "%";
+  }
+
+  // Swamp-only: instead of one smooth glide (which reads as "dodging traffic"),
+  // hop in a handful of discrete arcs - like actually jumping log to log across
+  // the water - with a little left/right wobble as if landing on different logs.
+  const SWAMP_HOPS = 4;
+  const SWAMP_HOP_LEFT_PCTS = [50, 42, 58, 46, 54];
+  async function animateSwampHop(targetBottomPct) {
+    const c = el("characterToken");
+    const segment = (targetBottomPct - START_BOTTOM_PCT) / SWAMP_HOPS;
+    const arcHeight = 4; // extra % rise at the peak of each hop, above the landing point
+
+    const keyframes = [{ bottom: START_BOTTOM_PCT + "%", left: SWAMP_HOP_LEFT_PCTS[0] + "%", offset: 0 }];
+    for (let i = 1; i <= SWAMP_HOPS; i++) {
+      const landBottom = START_BOTTOM_PCT + segment * i;
+      const peakBottom = landBottom + arcHeight;
+      const landLeft = SWAMP_HOP_LEFT_PCTS[i] ?? 50;
+      keyframes.push({ bottom: peakBottom + "%", left: landLeft + "%", offset: (i - 0.5) / SWAMP_HOPS });
+      keyframes.push({ bottom: landBottom + "%", left: landLeft + "%", offset: i / SWAMP_HOPS });
+    }
+
+    const anim = c.animate(keyframes, { duration: CROSS_ANIM_MS, easing: "ease-in-out", fill: "forwards" });
+    await anim.finished;
+    c.style.bottom = targetBottomPct + "%";
+    c.style.left = "50%";
+  }
+
+  function triggerBloodSplat(atBottomPct) {
+    const c = el("characterToken");
+    c.style.opacity = "0";
+    const splat = el("bloodSplat");
+    splat.style.bottom = atBottomPct + "%";
+    splat.classList.remove("show");
+    void splat.offsetWidth;
+    splat.classList.add("show");
+  }
+
+  function showBanner(text, cls) {
+    const b = el("eventBanner");
+    b.textContent = text;
+    b.className = "";
+    void b.offsetWidth;
+    b.classList.add("show");
+    if (cls) b.classList.add(cls);
+  }
+
+  // Returns an array of `n` booleans (exactly `survivorsCount` true), shuffled -
+  // this is what guarantees at least `minSurvivors` make it through a stage
+  // (see runEliminationRound) instead of leaving it to independent coin flips
+  // that could occasionally wipe out (almost) everyone at once.
+  function shuffledOutcomes(n, survivorsCount) {
+    const arr = new Array(n).fill(false);
+    for (let i = 0; i < survivorsCount; i++) arr[i] = true;
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+
+  // Between-stage recap: swaps #hopTrack out for #stageRecap (same slot),
+  // listing who's advancing vs. eliminated, for at least STAGE_RECAP_MS (3.5s).
+  async function showStageRecap(stageLabel, survivors, eliminated) {
+    el("hopTrack").style.display = "none";
+    el("turnInfo").textContent = " ";
+    el("stageRecapTitle").textContent = `${stageLabel.toUpperCase()} COMPLETE`;
+
+    const advList = el("stageRecapAdvancing");
+    advList.innerHTML = survivors.length
+      ? survivors.map(n => `<li>${n}</li>`).join("")
+      : `<li>(none)</li>`;
+
+    const elimList = el("stageRecapEliminated");
+    elimList.innerHTML = eliminated.length
+      ? eliminated.map(n => `<li>${n}</li>`).join("")
+      : `<li>(none)</li>`;
+
+    el("stageRecap").classList.add("show");
+    await sleep(STAGE_RECAP_MS);
+    el("stageRecap").classList.remove("show");
+    el("hopTrack").style.display = "";
+  }
+
+  async function runEliminationRound(players, stageLabel, themeKey, survivalRate, pointsIfEliminated, minSurvivors) {
+    setTrackTheme(themeKey);
+    el("stageTitle").textContent = stageLabel.toUpperCase();
+    showBanner(`${stageLabel.toUpperCase()} - ${players.length} REMAIN`, "");
+    await sleep(STAGE_BANNER_MS);
+
+    // How many survive is decided up front (proportional to survivalRate, but
+    // never below minSurvivors) - who specifically survives is then shuffled
+    // randomly, so every player's turn is still a genuine surprise.
+    const survivorsTarget = Math.min(
+      players.length,
+      Math.max(minSurvivors, Math.round(players.length * survivalRate))
+    );
+    const outcomes = shuffledOutcomes(players.length, survivorsTarget);
+
+    // Swamp hops log-to-log instead of gliding straight across (see animateSwampHop).
+    const doAnimate = themeKey === "swamp" ? animateSwampHop : animateCharacter;
+
+    const survivors = [];
+    for (let i = 0; i < players.length; i++) {
+      const name = players[i];
+      resetCharacterToStart();
+      el("turnInfo").textContent = `${name} is crossing the ${stageLabel}...`;
+      await sleep(200); // brief beat so the reset is visible before the run starts
+
+      if (outcomes[i]) {
+        await doAnimate(GOAL_BOTTOM_PCT);
+        survivors.push(name);
+        showBanner(`${name} MADE IT!`, "success");
+      } else {
+        const stopPct = 20 + Math.random() * 55; // stopped somewhere in the danger zone
+        triggerStrikerHit(themeKey, stopPct); // timed to "hit" right as the character arrives
+        await doAnimate(stopPct);
+        triggerBloodSplat(stopPct);
+        showBanner(`${name} ELIMINATED on the ${stageLabel}!`, "fail");
+        eliminationLog.push({ name, stage: stageLabel, points: pointsIfEliminated });
+      }
+      await sleep(TURN_RESULT_HOLD_MS);
+    }
+
+    const eliminatedThisRound = players.filter(name => !survivors.includes(name));
+    await showStageRecap(stageLabel, survivors, eliminatedThisRound);
+
+    return survivors;
+  }
+
+  // Maps a stage label ("Country Road", "Swamp", "Highway", "Sudden Death N")
+  // to one of the EPITAPHS_BY_THEME pools.
+  function epitaphThemeForStage(stageLabel) {
+    if (stageLabel.startsWith("Sudden Death")) return "overtime";
+    const found = STAGES.find(s => s.name === stageLabel);
+    return found ? found.key : "country";
+  }
+
+  function randomEpitaph(stageLabel) {
+    const pool = EPITAPHS_BY_THEME[epitaphThemeForStage(stageLabel)];
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+
+  function memoriamCauseLabel(stageLabel) {
+    return stageLabel.startsWith("Sudden Death") ? `Fell in ${stageLabel}` : `Died on the ${stageLabel}`;
+  }
+
+  // In Memoriam: a full-page Oregon Trail-style tombstone per eliminated
+  // player, one at a time, each held for MEMORIAM_HOLD_MS (6s).
+  async function showMemoriam(elimLog) {
+    if (elimLog.length === 0) return;
+    setState("MEMORIAM");
+
+    for (const { name, stage } of elimLog) {
+      el("tombstoneName").textContent = name;
+      el("tombstoneCause").textContent = memoriamCauseLabel(stage);
+      el("tombstoneEpitaph").textContent = `"${randomEpitaph(stage)}"`;
+
+      const stone = el("tombstone");
+      stone.classList.remove("show");
+      void stone.offsetWidth; // restart the rise-in animation
+      stone.classList.add("show");
+
+      await sleep(MEMORIAM_HOLD_MS);
+    }
+  }
+
+  async function playTournament() {
+    setState("HOPPING");
+    activePlayers = [...queue];
+    queue = [];
+    eliminationLog = [];
+
+    if (activePlayers.length < MIN_PLAYERS) {
+      const soloName = activePlayers[0] || null;
+      showFinalResults(null, [], soloName);
+      return;
+    }
+
+    for (const stg of STAGES) {
+      if (activePlayers.length <= 1) break;
+      activePlayers = await runEliminationRound(
+        activePlayers, stg.name, stg.key, stg.survivalRate, stg.points, stg.minSurvivors
+      );
+    }
+
+    let overtimeRound = 1;
+    while (activePlayers.length > 1) {
+      activePlayers = await runEliminationRound(
+        activePlayers, `Sudden Death ${overtimeRound}`, "highway", 0.5, OVERTIME_POINTS, 1
+      );
+      overtimeRound++;
+    }
+
+    const winner = activePlayers[0] || null;
+    if (winner) {
+      showBanner(`${winner.toUpperCase()} WINS THE ROYALE!`, "success");
+      await sleep(WINNER_BANNER_HOLD_MS);
+      await showMemoriam(eliminationLog);
+    }
+    applyResultsToStats(winner, eliminationLog);
+    await saveStats();
+    showFinalResults(winner, eliminationLog, null);
+  }
+
+  function applyResultsToStats(winner, elimLog) {
+    function ensure(name) {
+      if (!stats[name]) stats[name] = { gamesPlayed: 0, wins: 0, totalPoints: 0 };
+      return stats[name];
+    }
+    elimLog.forEach(({ name, points }) => {
+      const s = ensure(name);
+      s.gamesPlayed += 1;
+      s.totalPoints += points;
+    });
+    if (winner) {
+      const s = ensure(winner);
+      s.gamesPlayed += 1;
+      s.wins += 1;
+      s.totalPoints += WINNER_POINTS;
+    }
+  }
+
+  /* =========================================================================
+   * STATE 4: FINAL RESULTS - cycles with All-Time Champions
+   * ========================================================================= */
+  function showFinalResults(winner, elimLog, soloName) {
+    setState("RESULTS");
+    el("finalTitle").textContent = winner ? `${winner.toUpperCase()} WINS!` : "ROUND OVER";
+
+    const list = el("finalRecapList");
+    list.innerHTML = "";
+
+    if (soloName) {
+      list.innerHTML = `<li>${soloName} joined alone - need at least ${MIN_PLAYERS} players for Toad Royale!</li>`;
+    } else if (!winner && elimLog.length === 0) {
+      list.innerHTML = `<li>No players joined this round.</li>`;
+    } else {
+      if (winner) {
+        const li = document.createElement("li");
+        li.classList.add("winner-row");
+        li.innerHTML = `<span>\u{1F3C6} ${winner}</span><span>WINNER (+${WINNER_POINTS})</span>`;
+        list.appendChild(li);
+      }
+      [...elimLog].sort((a, b) => b.points - a.points).forEach(e => {
+        const li = document.createElement("li");
+        li.innerHTML = `<span>${e.name}</span><span>Eliminated - ${e.stage} (+${e.points})</span>`;
+        list.appendChild(li);
+      });
+    }
+
+    startResultsCycle();
+
+    setTimeout(() => {
+      if (state !== "RESULTS") return;
+      clearInterval(resultsCycleHandle);
+      enterIdle();
+    }, FINAL_HOLD_SECONDS * 1000);
+  }
+
+  function startResultsCycle() {
+    clearInterval(resultsCycleHandle);
+    let showingAllTime = false;
+    el("finalRecapView").classList.add("showing");
+    el("allTimeView").classList.remove("showing");
+
+    resultsCycleHandle = setInterval(() => {
+      if (state !== "RESULTS") { clearInterval(resultsCycleHandle); return; }
+      showingAllTime = !showingAllTime;
+      el("finalRecapView").classList.toggle("showing", !showingAllTime);
+      el("allTimeView").classList.toggle("showing", showingAllTime);
+      if (showingAllTime) renderLeaderboardInto("resultsLeaderboardList");
+    }, RESULTS_CYCLE_MS);
+  }
+
+  /* =========================================================================
+   * !resettoad (broadcaster only)
+   * ========================================================================= */
+  async function handleResetStats() {
+    stats = {};
+    await saveStats();
+    renderLeaderboard();
+  }
+
+  /* =========================================================================
+   * CHAT COMMAND ROUTER - shared by real ComfyJS chat and the dev simulator
+   * ========================================================================= */
+  function onChatCommand(user, message, flags) {
+    const text = (message || "").trim().toLowerCase();
+
+    if (text === "!join") {
+      if (isPlaying && !isLobbyOpen) return; // mid-tournament, lobby closed - ignore
+      handleJoin(user);
+      return;
+    }
+
+    if (text === "!resettoad") {
+      if (!flags || !flags.broadcaster) return;
+      handleResetStats();
+      return;
+    }
+
+    if (text === "!stats") {
+      if (state !== "IDLE") return; // only meaningful when no lobby/round is in progress
+      showStatsCard(user);
+      return;
+    }
+  }
+
+  /* =========================================================================
+   * TWITCH CONNECTION vs DEV SIMULATOR
+   * ========================================================================= */
+  function connectTwitch() {
+    console.log(`Toad Royale: connecting to Twitch chat channel "${CHANNEL_NAME}"...`);
+    ComfyJS.onChat = (user, message, flags) => onChatCommand(user, message, flags);
+    // ComfyJS routes any "!"-prefixed message to onCommand, not onChat - wire both
+    // so "!join"/"!resettoad" actually reach the router (see Par3's README
+    // "Chat commands not responding" writeup for the full story on this).
+    ComfyJS.onCommand = (user, command, message, flags) => onChatCommand(user, `!${command}`, flags);
+    ComfyJS.Init(CHANNEL_NAME);
+  }
+
+  function devLog(line) {
+    const box = el("devLog");
+    const entry = document.createElement("div");
+    entry.textContent = line;
+    box.prepend(entry);
+  }
+
+  function devSendChat() {
+    const user = el("devUsername").value.trim() || "TestUser";
+    const message = el("devMessage").value;
+    const broadcaster = el("devBroadcasterFlag").checked;
+    onChatCommand(user, message, { broadcaster });
+    devLog(`${user}: ${message}${broadcaster ? " [broadcaster]" : ""}`);
+  }
+
+  function devQuickJoin() {
+    el("devMessage").value = "!join";
+    devSendChat();
+  }
+
+  function devFloodJoins(n) {
+    const names = ["Runner", "Dasher", "Sprinter", "Racer", "Hopper", "Dodger", "Yeeter"];
+    for (let i = 0; i < n; i++) {
+      const name = names[Math.floor(Math.random() * names.length)] + Math.floor(Math.random() * 1000);
+      onChatCommand(name, "!join", {});
+      devLog(`${name}: !join`);
+    }
+  }
+
+  function devSendStats() {
+    el("devMessage").value = "!stats";
+    devSendChat();
+  }
+
+  function devSendReset() {
+    el("devMessage").value = "!resettoad";
+    el("devBroadcasterFlag").checked = true;
+    devSendChat();
+  }
+
+
+  /* =========================================================================
+   * BOOT
+   * ========================================================================= */
+  (async function init() {
+    await loadStats();
+    enterIdle();
+
+    if (DEV_MODE) {
+      el("devPanel").classList.add("show");
+      const connectBtn = document.createElement("button");
+      connectBtn.textContent = "Connect to Twitch Chat";
+      connectBtn.onclick = () => {
+        connectTwitch();
+        el("devChatStatus").textContent = "ON (live)";
+        connectBtn.disabled = true;
+      };
+      el("devPanel").appendChild(connectBtn);
+    } else {
+      connectTwitch();
+    }
+  })();
+  </script>
+</body>
+</html>
