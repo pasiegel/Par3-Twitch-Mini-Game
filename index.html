@@ -1,0 +1,1005 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Par 3 - Twitch Chat Mini-Game</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+  /* ================= BASE / TRANSPARENT STAGE ================= */
+  :root {
+    /* Single place to tune text size across the whole overlay. */
+    --fs-xs: 10px;
+    --fs-sm: 12px;
+    --fs-md: 14px;
+    --fs-lg: 18px;
+    --fs-xl: 26px;
+  }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0); /* transparent for OBS Browser Source */
+    font-family: 'Press Start 2P', monospace;
+    color: #eaffea;
+    overflow: hidden;
+  }
+
+  #stage {
+    position: relative;
+    width: 800px;
+    height: 220px;
+    margin: 0;
+  }
+
+  .panel {
+    display: none; /* state manager toggles this */
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    padding: 12px 18px;
+    background: linear-gradient(180deg, #0b3d0b 0%, #145214 100%);
+    border: 4px solid #ffd400;
+    border-radius: 6px;
+    box-shadow: 0 0 0 2px #063606 inset;
+    /* Bigger text can push content past the fixed #stage height - scroll
+       inside the panel instead of clipping it. */
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: #ffd400 transparent;
+  }
+  .panel.active { display: block; }
+  .panel::-webkit-scrollbar { width: 6px; }
+  .panel::-webkit-scrollbar-thumb { background: #ffd400; border-radius: 3px; }
+  .panel::-webkit-scrollbar-track { background: transparent; }
+
+  h1, h2, h3 { margin: 0 0 8px 0; text-shadow: 2px 2px 0 #000; }
+  h1 { font-size: var(--fs-lg); color: #ffd400; }
+  h2 { font-size: var(--fs-md); color: #fffbcc; }
+  .small { font-size: var(--fs-xs); line-height: 1.6; }
+
+  /* ================= IDLE / HALL OF FAME ================= */
+  #idlePrompt {
+    font-size: var(--fs-md);
+    color: #ffd400;
+    text-align: center;
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.55; transform: scale(1.05); }
+  }
+
+  #statsCard { display: none; text-align: center; }
+  #statsCardName { font-size: var(--fs-xl); }
+  #statsCardBody { margin: 14px 0 0; }
+  #statsCardBody .stat-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 10px 12px;
+    font-size: var(--fs-lg);
+    border-bottom: 1px dashed #2f6b2f;
+  }
+
+  #leaderboardList, #resultsLeaderboardList { list-style: none; margin: 6px 0 0; padding: 0; font-size: var(--fs-sm); }
+  #leaderboardList li, #resultsLeaderboardList li {
+    display: flex;
+    justify-content: space-between;
+    padding: 3px 6px;
+    border-bottom: 1px dashed #2f6b2f;
+  }
+  #leaderboardList li:nth-child(1), #resultsLeaderboardList li:nth-child(1) { color: #ffd400; }
+
+  /* ================= LOBBY ================= */
+  #lobbyTimer {
+    font-size: var(--fs-xl);
+    color: #ffd400;
+    text-align: center;
+    text-shadow: 2px 2px 0 #000;
+  }
+  #lobbyList {
+    list-style: none;
+    margin: 6px 0 0;
+    padding: 0;
+    font-size: var(--fs-sm);
+    /* No own max-height/overflow - the parent .panel scrolls if the queue
+       grows past the stage height, so nothing here gets silently clipped. */
+  }
+  #lobbyList li { padding: 2px 0; animation: slideIn 0.25s ease-out; }
+  @keyframes slideIn {
+    from { transform: translateX(-20px); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+
+  #toast {
+    position: absolute;
+    bottom: 8px;
+    left: 18px;
+    right: 18px;
+    font-size: var(--fs-sm);
+    color: #0b3d0b;
+    background: #ffd400;
+    padding: 4px 8px;
+    border-radius: 3px;
+    display: none;
+  }
+  #toast.show { display: block; animation: fadeOut 3s forwards; }
+  @keyframes fadeOut {
+    0%, 70% { opacity: 1; }
+    100% { opacity: 0; }
+  }
+
+  /* ================= PLAYING / SWING (per-hole, looped 9x per player) ================= */
+  #turnInfo {
+    font-size: var(--fs-md);
+    color: #ffd400;
+    text-align: center;
+    margin-bottom: 2px;
+  }
+  #swingingText {
+    font-size: var(--fs-sm);
+    color: #d8ffd8;
+    text-align: center;
+  }
+
+  /* CSS pixel-art golfer (swap for <img src="..."> later - see #golferSprite) */
+  #golferWrap {
+    position: absolute;
+    left: 34px;
+    bottom: 20px;
+    width: 40px;
+    height: 60px;
+  }
+  #golferSprite { position: relative; width: 100%; height: 100%; }
+  #golferSprite .head {
+    position: absolute; top: 0; left: 14px;
+    width: 12px; height: 12px; border-radius: 50%;
+    background: #ffd9a8; box-shadow: 0 0 0 2px #000;
+  }
+  #golferSprite .body {
+    position: absolute; top: 12px; left: 10px;
+    width: 20px; height: 26px;
+    background: #1e6fd9; box-shadow: 0 0 0 2px #000;
+  }
+  #golferSprite .legs {
+    position: absolute; top: 38px; left: 10px;
+    width: 20px; height: 18px;
+    background: #3a3a3a; box-shadow: 0 0 0 2px #000;
+  }
+  #golferSprite .club {
+    position: absolute; top: 14px; left: 27px;
+    width: 3px; height: 34px;
+    background: #c9c9c9; box-shadow: 0 0 0 1px #000;
+    transform-origin: top center;
+    transform: rotate(-15deg); /* address - resting near the ball, which sits to the golfer's right */
+  }
+  /* .swinging is toggled per-hole from JS (playSwingAnimation) - class removed and
+     re-added each time so the animation restarts instead of only playing once.
+     The ball (flying toward the flag on the right) only starts moving once this
+     swing reaches impact - see #ballSprite.rolling's animation-delay below. */
+  #golferSprite.swinging .club {
+    animation: swingClub 1.6s ease-in-out 1;
+  }
+  @keyframes swingClub {
+    0%   { transform: rotate(-15deg); }  /* address */
+    28%  { transform: rotate(100deg); }  /* top of backswing - away from the target, to the left */
+    50%  { transform: rotate(-15deg); }  /* impact - sweeping back through the ball */
+    65%  { transform: rotate(-100deg); } /* follow-through - toward the target, to the right */
+    100% { transform: rotate(-15deg); }  /* reset to address */
+  }
+
+  /* CSS pixel-art golf ball (swap for <img src="..."> later - see #ballSprite) */
+  #ballSprite {
+    position: absolute;
+    left: 62px;
+    bottom: 26px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #ffffff;
+    box-shadow:
+      0 0 0 2px #cfcfcf,
+      -3px -3px 0 1px #e8e8e8 inset;
+  }
+  /* .rolling is toggled per-hole from JS (playSwingAnimation), same restart pattern.
+     Delayed to start at swingClub's impact point (~50% of 1.6s) so the ball only
+     flies once the club actually sweeps forward through it, not during the backswing. */
+  #ballSprite.rolling {
+    animation: rollBall 900ms linear 1;
+    animation-delay: 700ms;
+  }
+  @keyframes rollBall {
+    0%   { transform: translateX(0) rotate(0deg); opacity: 1; }
+    90%  { opacity: 1; }
+    100% { transform: translateX(600px) rotate(900deg); opacity: 0; }
+  }
+
+  /* CSS pixel-art flag/pin (swap for <img src="..."> later - see #flagSprite) */
+  #flagSprite {
+    position: absolute;
+    right: 40px;
+    bottom: 20px;
+    width: 4px;
+    height: 40px;
+    background: #d8d8d8;
+  }
+  #flagSprite::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 4px;
+    width: 14px;
+    height: 10px;
+    background: #ff3b3b;
+    clip-path: polygon(0 0, 100% 50%, 0 100%);
+  }
+
+  /* Per-hole result splash, e.g. "HOLE 3: BOGEY (4 strokes)" */
+  #holeSplash {
+    position: absolute;
+    left: 18px;
+    right: 18px;
+    bottom: 58px;
+    text-align: center;
+    font-size: var(--fs-md);
+    color: #ffd400;
+    text-shadow: 2px 2px 0 #000;
+    opacity: 0;
+  }
+  #holeSplash.show { animation: splashPop 1.5s ease-out 1; }
+  #holeSplash.hio {
+    color: #fff200;
+    text-shadow: 0 0 6px #fff200, 0 0 14px #ff9d00;
+  }
+  @keyframes splashPop {
+    0%   { opacity: 0; transform: scale(0.8); }
+    15%  { opacity: 1; transform: scale(1.1); }
+    25%  { opacity: 1; transform: scale(1); }
+    80%  { opacity: 1; }
+    100% { opacity: 0; }
+  }
+
+  /* ================= RESULTS: cycles between Round Scorecard and All-Time Records ================= */
+  #roundScorecardView, #allTimeView { display: none; }
+  #roundScorecardView.showing, #allTimeView.showing { display: block; }
+
+  #scorecardWrap {
+    /* Vertical overflow (many players) is handled by the parent .panel scrolling.
+       This wrapper only needs to handle horizontal overflow (12 columns at a
+       bigger font can exceed the stage width). */
+    overflow-x: auto;
+    scrollbar-width: thin;
+    scrollbar-color: #ffd400 transparent;
+  }
+  #scorecardWrap::-webkit-scrollbar { height: 6px; }
+  #scorecardWrap::-webkit-scrollbar-thumb { background: #ffd400; border-radius: 3px; }
+  #scorecardWrap::-webkit-scrollbar-track { background: transparent; }
+
+  #scorecardTable {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--fs-xs);
+  }
+  #scorecardTable th, #scorecardTable td {
+    padding: 2px 3px;
+    text-align: center;
+    border-bottom: 1px dashed #2f6b2f;
+    white-space: nowrap;
+  }
+  #scorecardTable th:first-child, #scorecardTable td:first-child {
+    text-align: left;
+  }
+  #scorecardTable thead th { color: #fffbcc; }
+  #scorecardParRow th { color: #7fbf7f; font-weight: normal; } /* dimmer - reference row, not a player */
+  #scorecardTable tbody tr:first-child td { color: #ffd400; } /* lowest total = round winner */
+  #scorecardTable td.hio {
+    color: #fff200;
+    text-shadow: 0 0 4px #fff200;
+  }
+  #scorecardTable td.under-par { color: #7fe0ff; }
+  #scorecardTable td.over-par { color: #ff8a6b; }
+
+  /* ================= DEV / SIMULATOR PANEL ================= */
+  #devPanel {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 820px;
+    width: 320px;
+    height: 220px;
+    background: #101010;
+    color: #d8ffd8;
+    font-family: monospace;
+    font-size: var(--fs-md);
+    padding: 10px;
+    box-sizing: border-box;
+    border: 1px solid #444;
+    overflow-y: auto;
+  }
+  #devPanel.show { display: block; }
+  #devPanel h3 { color: #ffd400; font-size: var(--fs-md); }
+  #devPanel label { display: block; margin: 6px 0 2px; }
+  #devPanel input[type=text] {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 3px;
+    font-family: monospace;
+  }
+  #devPanel button {
+    margin: 4px 4px 4px 0;
+    padding: 4px 8px;
+    cursor: pointer;
+  }
+  #devToggleBtn {
+    position: fixed;
+    top: 4px;
+    left: 4px;
+    z-index: 999;
+    font-size: 9px;
+    opacity: 0.35;
+    background: #000;
+    color: #fff;
+    border: 1px solid #555;
+    padding: 2px 5px;
+    cursor: pointer;
+  }
+  #devToggleBtn:hover { opacity: 1; }
+  #devLog {
+    margin-top: 8px;
+    max-height: 60px;
+    overflow-y: auto;
+    font-size: var(--fs-sm);
+    color: #9adf9a;
+  }
+</style>
+</head>
+<body>
+
+  <!-- Tiny always-present control to flip DEV_MODE on/off without editing the URL. -->
+  <button id="devToggleBtn" title="Toggle dev/simulator mode (persists via localStorage)">dev</button>
+
+  <div id="stage">
+
+    <!-- STATE 1: Idle & Hall of Fame -->
+    <div id="panelIdle" class="panel active">
+      <div id="idlePrompt">Type !join to play Par 3!</div>
+      <div id="hallOfFame" style="display:none;">
+        <h2>All-Time Course Records</h2>
+        <ul id="leaderboardList"></ul>
+      </div>
+      <!-- Shown temporarily by !stats, then reverts to the normal idle cycle above. -->
+      <div id="statsCard">
+        <h2 id="statsCardName">Player Stats</h2>
+        <div id="statsCardBody"></div>
+      </div>
+    </div>
+
+    <!-- STATE 2: Lobby / Queue -->
+    <div id="panelLobby" class="panel">
+      <h1>PAR 3 - LOBBY OPEN</h1>
+      <div id="lobbyTimer">60</div>
+      <ul id="lobbyList"></ul>
+      <div id="toast"></div>
+    </div>
+
+    <!-- STATE 3: Playing - loops 9 holes per player, splashing strokes+hole after each swing -->
+    <div id="panelPlaying" class="panel">
+      <div id="turnInfo">&nbsp;</div>
+      <div id="swingingText">Swinging...</div>
+      <div id="golferWrap">
+        <!-- CSS pixel-art golfer. Swap for <img src="..."> here later if desired. -->
+        <div id="golferSprite">
+          <div class="head"></div>
+          <div class="body"></div>
+          <div class="legs"></div>
+          <div class="club"></div>
+        </div>
+      </div>
+      <div id="ballSprite"></div>
+      <div id="flagSprite"></div>
+      <div id="holeSplash"></div>
+    </div>
+
+    <!-- STATE 4: Results - cycles between this round's scorecard and All-Time Course Records -->
+    <div id="panelResults" class="panel">
+      <div id="roundScorecardView">
+        <h1>ROUND SCORECARD</h1>
+        <div id="scorecardWrap">
+          <table id="scorecardTable">
+            <thead>
+              <tr id="scorecardHeaderRow"><th>Hole</th></tr>
+              <tr id="scorecardParRow"><th>Par</th></tr>
+            </thead>
+            <tbody id="scorecardBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div id="allTimeView">
+        <h2>All-Time Course Records</h2>
+        <ul id="resultsLeaderboardList"></ul>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ================= DEV / SIMULATOR PANEL (only shown when DEV_MODE is on) ================= -->
+  <div id="devPanel">
+    <h3>PAR 3 DEV CONSOLE</h3>
+    <div class="small">Live Twitch chat is <span id="devChatStatus">OFF</span> (see README "Going Live").</div>
+
+    <label>Username</label>
+    <input type="text" id="devUsername" value="PixelPlayer">
+
+    <label>Message</label>
+    <input type="text" id="devMessage" value="!join" onkeydown="if(event.key==='Enter')devSendChat();">
+
+    <label><input type="checkbox" id="devBroadcasterFlag"> Send as broadcaster (flags.broadcaster)</label>
+
+    <div>
+      <button onclick="devSendChat()">Send Chat Message</button>
+      <button onclick="devQuickJoin()">Quick !join</button>
+      <button onclick="devFloodJoins(5)">Flood 5 Random Joins</button>
+      <button onclick="devSendStats()">Quick !stats</button>
+      <button onclick="devSendReset()">!resetpar3 (as broadcaster)</button>
+    </div>
+
+    <div id="devLog"></div>
+  </div>
+
+  <!-- ComfyJS handles real Twitch chat reading (anonymous, read-only). -->
+  <script src="https://cdn.jsdelivr.net/npm/comfy.js@latest/dist/comfy.min.js"></script>
+  <!-- Local, file://-safe config - edit config.js to change the Twitch channel. -->
+  <script src="config.js"></script>
+  <script>
+  /* =========================================================================
+   * PAR 3 - CONFIG
+   * ========================================================================= */
+  const CHANNEL_NAME    = GAME_CONFIG.channel; // from config.js - edit that file, not this line
+  const API_BASE        = "http://localhost:5000"; // must match server.py's --port if you changed it
+  const LOBBY_SECONDS   = 60;
+  const HOLES_PER_ROUND = 9;
+  const PAR_PER_HOLE    = 3; // matches SCORE_MAP below (3 strokes = "Par")
+  const HOLE_ANIM_MS    = 1600; // total swing time: must match .swinging club's 1.6s duration, and the
+                                 // #ballSprite.rolling 700ms delay + 900ms duration (ball launches at impact)
+  const HOLE_SPLASH_MS  = 1500; // must match the #holeSplash.show CSS animation duration
+  const SCORECARD_SECONDS = 24; // total hold time on the RESULTS state
+  const RESULTS_CYCLE_MS  = 6000; // how often it flips between Round Scorecard and All-Time Records
+  const STATS_CARD_MS     = 6000; // how long !stats stays on screen before reverting to the idle cycle
+
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+  // DEV_MODE: enabled via ?dev=1 in the URL, or the persisted localStorage flag
+  // (toggled by the "dev" button in the corner). See README.md -> "Dev Mode".
+  let DEV_MODE = new URLSearchParams(location.search).has("dev") ||
+                 localStorage.getItem("par3_dev_mode") === "1";
+
+  const SCORE_MAP = {
+    1: "Hole in One!",
+    2: "Birdie",
+    3: "Par",
+    4: "Bogey",
+    5: "Double Bogey",
+    6: "Triple Bogey"
+  };
+
+  /* =========================================================================
+   * STATE MACHINE
+   * Only one of these is true at a time; every chat command / timer checks
+   * these flags before acting so stray commands can't jump states out of order.
+   * ========================================================================= */
+  let state = "IDLE"; // IDLE | LOBBY | PLAYING | RESULTS
+  let isLobbyOpen = false;
+  let isPlaying = false;
+
+  let stats = {};       // full persisted stats object, keyed by username
+  let queue = [];        // usernames currently in the lobby (State 2)
+  let lobbyTimerHandle = null;
+  let resultsCycleHandle = null;
+  let lobbySecondsLeft = LOBBY_SECONDS;
+  let idleCycleHandle = null;
+  let statsCardTimeoutHandle = null;
+
+  /* =========================================================================
+   * DOM SHORTCUTS
+   * ========================================================================= */
+  const el = id => document.getElementById(id);
+  const panels = {
+    IDLE: el("panelIdle"),
+    LOBBY: el("panelLobby"),
+    PLAYING: el("panelPlaying"),
+    RESULTS: el("panelResults")
+  };
+
+  function setState(next) {
+    state = next;
+    isLobbyOpen = (state === "LOBBY");
+    isPlaying = (state === "PLAYING");
+    Object.values(panels).forEach(p => p.classList.remove("active"));
+    panels[next].classList.add("active");
+  }
+
+  /* =========================================================================
+   * BACKEND I/O
+   * ========================================================================= */
+  async function loadStats() {
+    try {
+      const res = await fetch(`${API_BASE}/load_stats`);
+      stats = await res.json();
+    } catch (err) {
+      console.error("Par3: failed to load stats, starting empty.", err);
+      stats = {};
+    }
+  }
+
+  async function saveStats() {
+    try {
+      await fetch(`${API_BASE}/save_stats`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(stats)
+      });
+    } catch (err) {
+      console.error("Par3: failed to save stats.", err);
+    }
+  }
+
+  function avgScore(username) {
+    const s = stats[username];
+    if (!s || !s.totalRounds) return null;
+    return (s.totalStrokes / s.totalRounds);
+  }
+
+  /* =========================================================================
+   * STATE 1: IDLE & HALL OF FAME
+   * Cycles between the pulsing "!join" prompt and the top-5 leaderboard.
+   * ========================================================================= */
+  function renderLeaderboardInto(listId) {
+    const rows = Object.entries(stats)
+      .map(([name, s]) => ({
+        name,
+        holeInOnes: s.holeInOnes || 0,
+        avg: s.totalRounds ? s.totalStrokes / s.totalRounds : Infinity
+      }))
+      .sort((a, b) => (b.holeInOnes - a.holeInOnes) || (a.avg - b.avg))
+      .slice(0, 5);
+
+    const list = el(listId);
+    list.innerHTML = "";
+    if (rows.length === 0) {
+      list.innerHTML = `<li><span>No rounds played yet</span></li>`;
+      return;
+    }
+    rows.forEach(r => {
+      const li = document.createElement("li");
+      li.innerHTML = `<span>${r.name}</span><span>${r.holeInOnes} HIO | Avg ${r.avg.toFixed(1)}</span>`;
+      list.appendChild(li);
+    });
+  }
+
+  // Idle's Hall of Fame is the same top-5 leaderboard the RESULTS cycle shows
+  // as "All-Time Course Records" (renderLeaderboardInto("resultsLeaderboardList")).
+  function renderLeaderboard() {
+    renderLeaderboardInto("leaderboardList");
+  }
+
+  function startIdleCycle() {
+    clearInterval(idleCycleHandle);
+    let showingBoard = false;
+    idleCycleHandle = setInterval(() => {
+      if (state !== "IDLE") return;
+      showingBoard = !showingBoard;
+      el("idlePrompt").style.display = showingBoard ? "none" : "block";
+      el("hallOfFame").style.display = showingBoard ? "block" : "none";
+      if (showingBoard) renderLeaderboard();
+    }, 6000);
+  }
+
+  function enterIdle() {
+    setState("IDLE");
+    clearTimeout(statsCardTimeoutHandle);
+    el("statsCard").style.display = "none";
+    el("idlePrompt").style.display = "block";
+    el("hallOfFame").style.display = "none";
+    startIdleCycle();
+  }
+
+  // !stats: only meaningful when nothing's in progress (IDLE) - pauses the
+  // normal prompt/leaderboard cycle, shows the requesting viewer's own stats
+  // for STATS_CARD_MS, then reverts back to the idle cycle via enterIdle().
+  function showStatsCard(username) {
+    clearInterval(idleCycleHandle);
+    clearTimeout(statsCardTimeoutHandle);
+    el("idlePrompt").style.display = "none";
+    el("hallOfFame").style.display = "none";
+
+    const s = stats[username];
+    el("statsCardName").textContent = `${username}'s Stats`;
+    const body = el("statsCardBody");
+    if (!s || !s.totalRounds) {
+      body.innerHTML = `<div class="stat-row"><span>No rounds played yet</span></div>`;
+    } else {
+      const avg = (s.totalStrokes / s.totalRounds).toFixed(1);
+      body.innerHTML = `
+        <div class="stat-row"><span>Rounds Played</span><span>${s.totalRounds}</span></div>
+        <div class="stat-row"><span>Avg Score</span><span>${avg}</span></div>
+        <div class="stat-row"><span>Hole in Ones</span><span>${s.holeInOnes || 0}</span></div>
+      `;
+    }
+    el("statsCard").style.display = "block";
+
+    statsCardTimeoutHandle = setTimeout(() => {
+      if (state !== "IDLE") return; // a lobby may have opened in the meantime - leave it alone
+      enterIdle();
+    }, STATS_CARD_MS);
+  }
+
+  /* =========================================================================
+   * STATE 2: LOBBY / QUEUE
+   * ========================================================================= */
+  function showToast(message) {
+    const toast = el("toast");
+    toast.textContent = message;
+    toast.classList.remove("show");
+    void toast.offsetWidth; // restart animation
+    toast.classList.add("show");
+  }
+
+  function renderLobbyList() {
+    const list = el("lobbyList");
+    list.innerHTML = "";
+    queue.forEach(name => {
+      const li = document.createElement("li");
+      li.textContent = name;
+      list.appendChild(li);
+    });
+  }
+
+  function openLobby() {
+    clearInterval(idleCycleHandle);
+    clearInterval(resultsCycleHandle); // in case !join reopens the lobby while a scorecard is still cycling
+    clearTimeout(statsCardTimeoutHandle); // ...or while a !stats card is showing
+    el("statsCard").style.display = "none";
+    queue = [];
+    lobbySecondsLeft = LOBBY_SECONDS;
+    setState("LOBBY");
+    el("lobbyTimer").textContent = lobbySecondsLeft;
+    renderLobbyList();
+
+    lobbyTimerHandle = setInterval(() => {
+      lobbySecondsLeft--;
+      el("lobbyTimer").textContent = lobbySecondsLeft;
+      if (lobbySecondsLeft <= 0) {
+        clearInterval(lobbyTimerHandle);
+        playRound();
+      }
+    }, 1000);
+  }
+
+  function handleJoin(username) {
+    if (!isLobbyOpen) {
+      // First !join of a fresh cycle opens the lobby, per spec section 4/State 2.
+      openLobby();
+    }
+    if (queue.includes(username)) return; // ignore duplicates
+    queue.push(username);
+    renderLobbyList();
+
+    const avg = avgScore(username);
+    showToast(avg !== null
+      ? `${username} joined! (Avg: ${avg.toFixed(1)})`
+      : `${username} joined!`);
+  }
+
+  /* =========================================================================
+   * STATE 3: PLAY RESOLUTION
+   * Plays out one player's swing at a time, looping 9 holes per player before
+   * moving to the next player in the queue. Each hole: swing animation, then
+   * a splash of that hole's stroke count + golf term before moving on.
+   * ========================================================================= */
+  function playSwingAnimation() {
+    // Remove-then-reflow-then-add restarts a CSS animation that already ran once.
+    const golfer = el("golferSprite");
+    golfer.classList.remove("swinging");
+    void golfer.offsetWidth;
+    golfer.classList.add("swinging");
+
+    const ball = el("ballSprite");
+    ball.classList.remove("rolling");
+    void ball.offsetWidth;
+    ball.classList.add("rolling");
+  }
+
+  function showHoleSplash(holeNum, strokes, term) {
+    const splash = el("holeSplash");
+    splash.textContent = `HOLE ${holeNum}: ${term.toUpperCase()} (${strokes} STROKE${strokes === 1 ? "" : "S"})`;
+    splash.classList.toggle("hio", strokes === 1);
+    splash.classList.remove("show");
+    void splash.offsetWidth;
+    splash.classList.add("show");
+  }
+
+  async function playRound() {
+    setState("PLAYING");
+    const players = [...queue];
+    queue = [];
+
+    const roundResults = [];
+
+    for (const name of players) {
+      const holes = [];
+      for (let holeNum = 1; holeNum <= HOLES_PER_ROUND; holeNum++) {
+        el("turnInfo").textContent = `${name} - Hole ${holeNum} of ${HOLES_PER_ROUND}`;
+        playSwingAnimation();
+        await sleep(HOLE_ANIM_MS);
+
+        const strokes = 1 + Math.floor(Math.random() * 6); // 1-6
+        const term = SCORE_MAP[strokes];
+        holes.push({ hole: holeNum, strokes, term });
+
+        showHoleSplash(holeNum, strokes, term);
+        await sleep(HOLE_SPLASH_MS);
+      }
+
+      const totalStrokes = holes.reduce((sum, h) => sum + h.strokes, 0);
+      const holeInOnes = holes.filter(h => h.strokes === 1).length;
+      roundResults.push({ name, holes, totalStrokes, holeInOnes });
+    }
+
+    if (roundResults.length > 0) {
+      applyResultsToStats(roundResults);
+      await saveStats();
+    }
+    showScorecard(roundResults);
+  }
+
+  function applyResultsToStats(roundResults) {
+    roundResults.forEach(({ name, totalStrokes, holeInOnes }) => {
+      if (!stats[name]) {
+        stats[name] = { totalRounds: 0, totalStrokes: 0, holeInOnes: 0 };
+      }
+      const s = stats[name];
+      s.totalRounds += 1; // a "round" is a full 9-hole playthrough
+      s.totalStrokes += totalStrokes;
+      s.holeInOnes += holeInOnes;
+    });
+  }
+
+  /* =========================================================================
+   * STATE 4: RESULTS
+   * A real golf-style scorecard for this round (Hole/Par header rows, one
+   * player row each, a Total column and a +/- to par column), cycled every
+   * RESULTS_CYCLE_MS against the All-Time Course Records leaderboard for
+   * SCORECARD_SECONDS total before returning to IDLE.
+   * ========================================================================= */
+  function formatRelativeToPar(totalStrokes) {
+    const diff = totalStrokes - (PAR_PER_HOLE * HOLES_PER_ROUND);
+    if (diff === 0) return "E";
+    return diff > 0 ? `+${diff}` : `${diff}`;
+  }
+
+  function renderScorecardHeader() {
+    const headerRow = el("scorecardHeaderRow");
+    const parRow = el("scorecardParRow");
+    for (let i = 1; i <= HOLES_PER_ROUND; i++) {
+      const th = document.createElement("th");
+      th.textContent = i;
+      headerRow.appendChild(th);
+
+      const parTh = document.createElement("th");
+      parTh.textContent = PAR_PER_HOLE;
+      parRow.appendChild(parTh);
+    }
+
+    const totalTh = document.createElement("th");
+    totalTh.textContent = "Total";
+    headerRow.appendChild(totalTh);
+    const parTotalTh = document.createElement("th");
+    parTotalTh.textContent = PAR_PER_HOLE * HOLES_PER_ROUND;
+    parRow.appendChild(parTotalTh);
+
+    const plusMinusTh = document.createElement("th");
+    plusMinusTh.textContent = "+/-";
+    headerRow.appendChild(plusMinusTh);
+    const parPlusMinusTh = document.createElement("th");
+    parPlusMinusTh.textContent = "E";
+    parRow.appendChild(parPlusMinusTh);
+  }
+
+  function renderRoundScorecard(roundResults) {
+    const body = el("scorecardBody");
+    body.innerHTML = "";
+
+    if (roundResults.length === 0) {
+      body.innerHTML = `<tr><td colspan="${HOLES_PER_ROUND + 3}">No players joined this round.</td></tr>`;
+      return;
+    }
+
+    const sorted = [...roundResults].sort((a, b) => a.totalStrokes - b.totalStrokes);
+    sorted.forEach(r => {
+      const tr = document.createElement("tr");
+
+      const nameTd = document.createElement("td");
+      nameTd.textContent = r.name;
+      tr.appendChild(nameTd);
+
+      r.holes.forEach(h => {
+        const td = document.createElement("td");
+        td.textContent = h.strokes;
+        if (h.strokes === 1) td.classList.add("hio");
+        tr.appendChild(td);
+      });
+
+      const totalTd = document.createElement("td");
+      totalTd.textContent = r.totalStrokes;
+      tr.appendChild(totalTd);
+
+      const diff = r.totalStrokes - (PAR_PER_HOLE * HOLES_PER_ROUND);
+      const plusMinusTd = document.createElement("td");
+      plusMinusTd.textContent = formatRelativeToPar(r.totalStrokes);
+      if (diff < 0) plusMinusTd.classList.add("under-par");
+      if (diff > 0) plusMinusTd.classList.add("over-par");
+      tr.appendChild(plusMinusTd);
+
+      body.appendChild(tr);
+    });
+  }
+
+  function startResultsCycle() {
+    clearInterval(resultsCycleHandle);
+    let showingAllTime = false;
+    el("roundScorecardView").classList.add("showing");
+    el("allTimeView").classList.remove("showing");
+
+    resultsCycleHandle = setInterval(() => {
+      if (state !== "RESULTS") { clearInterval(resultsCycleHandle); return; }
+      showingAllTime = !showingAllTime;
+      el("roundScorecardView").classList.toggle("showing", !showingAllTime);
+      el("allTimeView").classList.toggle("showing", showingAllTime);
+      if (showingAllTime) renderLeaderboardInto("resultsLeaderboardList");
+    }, RESULTS_CYCLE_MS);
+  }
+
+  function showScorecard(roundResults) {
+    setState("RESULTS");
+    renderRoundScorecard(roundResults);
+    startResultsCycle();
+
+    setTimeout(() => {
+      if (state !== "RESULTS") return; // a new lobby already opened - don't force back to idle
+      clearInterval(resultsCycleHandle);
+      enterIdle();
+    }, SCORECARD_SECONDS * 1000);
+  }
+
+  /* =========================================================================
+   * !resetpar3 (broadcaster only)
+   * ========================================================================= */
+  async function handleResetStats() {
+    stats = {};
+    await saveStats();
+    renderLeaderboard();
+  }
+
+  /* =========================================================================
+   * CHAT COMMAND ROUTER
+   * Both real ComfyJS chat events and the dev simulator funnel through this
+   * single function, so game logic never needs to know which source it came from.
+   * ========================================================================= */
+  function onChatCommand(user, message, flags) {
+    const text = (message || "").trim().toLowerCase();
+
+    if (text === "!join") {
+      if (isPlaying) return; // lobby closed, mid-round - ignore per State 3 spec
+      handleJoin(user);
+      return;
+    }
+
+    if (text === "!resetpar3") {
+      if (!flags || !flags.broadcaster) return; // broadcaster-restricted
+      handleResetStats();
+      return;
+    }
+
+    if (text === "!stats") {
+      if (state !== "IDLE") return; // only meaningful when no round/lobby is in progress
+      showStatsCard(user);
+      return;
+    }
+  }
+
+  /* =========================================================================
+   * TWITCH CONNECTION (real chat) vs DEV SIMULATOR
+   * ========================================================================= */
+  function connectTwitch() {
+    // ComfyJS itself logs "Connected:irc-ws.chat.twitch.tv:443" to the console
+    // once the socket opens - check that in devtools if chat commands seem dead.
+    console.log(`Par3: connecting to Twitch chat channel "${CHANNEL_NAME}"...`);
+    ComfyJS.onChat = (user, message, flags) => onChatCommand(user, message, flags);
+    // ComfyJS routes any "!"-prefixed message to onCommand instead of onChat
+    // (stripping the "!" and lowercasing the command word), so !join/!resetpar3
+    // NEVER reach onChat above - reconstruct "!command" and funnel it through
+    // the same router so both paths behave identically.
+    ComfyJS.onCommand = (user, command, message, flags) => onChatCommand(user, `!${command}`, flags);
+    ComfyJS.Init(CHANNEL_NAME); // anonymous, read-only - no OAuth token needed
+  }
+
+  function devLog(line) {
+    const box = el("devLog");
+    const entry = document.createElement("div");
+    entry.textContent = line;
+    box.prepend(entry);
+  }
+
+  function devSendChat() {
+    const user = el("devUsername").value.trim() || "TestUser";
+    const message = el("devMessage").value;
+    const broadcaster = el("devBroadcasterFlag").checked;
+    onChatCommand(user, message, { broadcaster });
+    devLog(`${user}: ${message}${broadcaster ? " [broadcaster]" : ""}`);
+  }
+
+  function devQuickJoin() {
+    el("devMessage").value = "!join";
+    devSendChat();
+  }
+
+  function devFloodJoins(n) {
+    const names = ["PixelPlayer", "TurfKing", "BogeyBob", "EagleEyed", "PuttPutt", "SandTrap99", "ChipShotChad"];
+    for (let i = 0; i < n; i++) {
+      const name = names[Math.floor(Math.random() * names.length)] + Math.floor(Math.random() * 1000);
+      onChatCommand(name, "!join", {});
+      devLog(`${name}: !join`);
+    }
+  }
+
+  function devSendStats() {
+    el("devMessage").value = "!stats";
+    devSendChat();
+  }
+
+  function devSendReset() {
+    el("devMessage").value = "!resetpar3";
+    el("devBroadcasterFlag").checked = true;
+    devSendChat();
+  }
+
+  /* =========================================================================
+   * DEV MODE toggle button (top-left corner, works even outside ?dev=1)
+   * ========================================================================= */
+  el("devToggleBtn").addEventListener("click", () => {
+    const next = localStorage.getItem("par3_dev_mode") === "1" ? "0" : "1";
+    localStorage.setItem("par3_dev_mode", next);
+    location.reload();
+  });
+
+  /* =========================================================================
+   * BOOT
+   * ========================================================================= */
+  (async function init() {
+    renderScorecardHeader();
+    await loadStats();
+    enterIdle();
+
+    if (DEV_MODE) {
+      el("devPanel").classList.add("show");
+      // In dev mode we do NOT auto-connect to Twitch - test with the simulator
+      // first, then hit the button below (or just turn dev mode off) to go live.
+      const connectBtn = document.createElement("button");
+      connectBtn.textContent = "Connect to Twitch Chat";
+      connectBtn.onclick = () => {
+        connectTwitch();
+        el("devChatStatus").textContent = "ON (live)";
+        connectBtn.disabled = true;
+      };
+      el("devPanel").appendChild(connectBtn);
+    } else {
+      // Normal OBS Browser Source path: connect for real immediately.
+      connectTwitch();
+    }
+  })();
+  </script>
+</body>
+</html>
