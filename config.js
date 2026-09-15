@@ -4,5 +4,5 @@
 // script that assigns one object is the file://-safe equivalent - edit the
 // value in quotes below just like you would a JSON field.)
 const GAME_CONFIG = {
-  channel: "PaladinArcade"
+  channel: "TwitchChannelName"
 };
