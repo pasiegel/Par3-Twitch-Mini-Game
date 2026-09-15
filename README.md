@@ -10,8 +10,6 @@ end. Stats persist between streams.
 
 ![Round Scorecard](screenshots/scorecard.png)
 
-> Looking for design notes, bug postmortems, or test logs instead? See
-> [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## What's in this folder
 
